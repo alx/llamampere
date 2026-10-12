@@ -3,9 +3,21 @@
 llama.cpp fork ("llamAmpere", commit `31cdb8e2`) prebuilt for **NVIDIA RTX 3090 (sm_86)**, serving
 **Qwen3.8-27B-ATX-IQ4_XS** on VAST.ai behind the `api.girard-davila.net` LiteLLM proxy.
 
-This image is designed to boot on any 3090-class VAST instance (16 GiB+ RAM). It downloads the
+The image is designed to boot on any 3090-class VAST instance (16 GiB+ RAM). It downloads the
 14.5 GiB model from Hugging Face at first boot (size-verified, re-fetched if corrupt), then serves
 OpenAI-compatible inference on port 8080.
+
+## Targets (two tiers of the self-hosted offer, org-or6b.12)
+
+| Target | Dockerfile | GHCR package | GPU | Tier |
+|---|---|---|---|---|
+| `sm86` (default) | `Dockerfile` | `ghcr.io/alx/llamampere-sm86` | RTX 3090 24 GB (CUDA 12.4) | standard |
+| `sm120` | `Dockerfile.sm120` | `ghcr.io/alx/llamampere-sm120` | RTX 5090 32 GB (CUDA 12.8.1) | premium |
+
+Same pinned llamAmpere commit, same entrypoint/assets/model in both; `sm120` differs only in the
+CUDA base (Blackwell kernels need >= 12.8), the arch flag (`120a`), and a version-agnostic
+cublas stage. sm_90 (Hopper) is deliberately NOT built: DC H100/H200 rents at $2.59–5.79/hr
+(10–17× a 3090) and only pays off for 80–140 GB model classes.
 
 ## What's in the image
 
@@ -19,11 +31,15 @@ OpenAI-compatible inference on port 8080.
 ## Build
 
 ```sh
-./build-and-push.sh
+./build-and-push.sh              # standard tier (sm86)
+TARGET=sm120 ./build-and-push.sh # premium tier (sm120 / RTX 5090)
 # or manually:
-docker build -f image/Dockerfile --build-arg LLAMAAMPRE_COMMIT=<sha> -t ghcr.io/alx/llamampere-sm86:<tag> image/
+docker build -f Dockerfile --build-arg LLAMAAMPRE_COMMIT=<sha> -t ghcr.io/alx/llamampere-sm86:<tag> .
 docker push ghcr.io/alx/llamampere-sm86:<tag>
 ```
+
+After a successful push, record the printed digest in `vast/config.env` on the deploy box
+(`IMAGE_DIGEST` for sm86, `IMAGE_DIGEST_SM120` for sm120).
 
 The GHCR package page renders this README because the image carries
 `LABEL org.opencontainers.image.source=https://github.com/alx/llamampere-sm86`.

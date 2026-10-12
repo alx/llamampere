@@ -1,26 +1,43 @@
 #!/usr/bin/env bash
-# Build + push the llamAmpere sm_86 image to GHCR, print the digest (org-xpi U2).
+# Build + push a llamAmpere image to GHCR and print the digest (org-xpi U2).
+#
+# Targets (org-or6b.12: two tiers of the qwen3.8-27b self-hosted offer):
+#   TARGET=sm86   (default)  Dockerfile,        ghcr.io/alx/llamampere-sm86    — standard tier (RTX 3090)
+#   TARGET=sm120              Dockerfile.sm120, ghcr.io/alx/llamampere-sm120   — premium tier (RTX 5090, CUDA 12.8)
 #
 # Run FROM ANY x86_64 DOCKER BOX (fami is the reference build box): the CUDA
 # toolkit comes from the base image, so no local GPU/nvcc is needed — only the
-# parity test needs a real 3090. Requires: docker buildx, gh auth (GHCR push).
+# parity test needs a real GPU of the target arch. Requires: docker buildx,
+# gh auth (GHCR push).
 #
-# Usage (from the repo, with vast/image/ present):
-#   BUILD_JOBS=2 bash vast/image/build-and-push.sh          # BUILD_JOBS caps -j
-#   GHCR_IMAGE=... bash vast/image/build-and-push.sh        # override target
+# Usage (from the repo):
+#   BUILD_JOBS=2 bash build-and-push.sh                 # BUILD_JOBS caps -j
+#   TARGET=sm120 bash build-and-push.sh                # premium tier
+#   GHCR_IMAGE=... bash build-and-push.sh              # override target
 #
 # Rebuilds are idempotent: bump LLAMAAMPRE_COMMIT in this script (and the
 # Dockerfile ARG default) only if the llamAmpere pin changes. ~30-60 min for a
 # cold compile; buildx caches per-layer, so a Dockerfile tweak re-runs only the
 # changed layers.
 #
-# After success, record the printed digest in vast/config.env (U3 needs it):
-#   IMAGE_DIGEST=ghcr.io/alx/llamampere-sm86@sha256:...
+# After success, record the printed digest in vast/config.env:
+#   sm86  -> IMAGE_DIGEST=ghcr.io/alx/llamampere-sm86@sha256:...
+#   sm120 -> IMAGE_DIGEST_SM120=ghcr.io/alx/llamampere-sm120@sha256:...
 set -euo pipefail
 
-IMAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # .../vast/image (== build context)
+IMAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # build context
 CTX="$IMAGE_DIR"
-GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/alx/llamampere-sm86:31cdb8e22}"
+TARGET="${TARGET:-sm86}"
+if [[ -n "${GHCR_IMAGE:-}" ]]; then
+    : # explicit override wins
+elif [[ "$TARGET" == "sm120" ]]; then
+    GHCR_IMAGE="ghcr.io/alx/llamampere-sm120:31cdb8e22"
+    DOCKERFILE="Dockerfile.sm120"
+else
+    [[ "$TARGET" == "sm86" ]] || { echo "TARGET must be sm86|sm120, got: $TARGET" >&2; exit 1; }
+    GHCR_IMAGE="ghcr.io/alx/llamampere-sm86:31cdb8e22"
+    DOCKERFILE="Dockerfile"
+fi
 COMMIT="31cdb8e2257aeb855462d1697e68b14738818f49"
 SHORT="${COMMIT:0:7}"
 # CUDA kernel builds are RAM-hungry; cap parallel jobs (raise on beefier boxes).
@@ -39,7 +56,7 @@ gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-st
 echo "Building + pushing $GHCR_IMAGE ..."
 docker buildx build \
   --platform linux/amd64 \
-  --file "$CTX/Dockerfile" \
+  --file "$CTX/$DOCKERFILE" \
   --build-arg LLAMAAMPRE_COMMIT="$COMMIT" \
   --build-arg BUILD_JOBS="$BUILD_JOBS" \
   --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

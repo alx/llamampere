@@ -1,0 +1,135 @@
+# llamAmpere sm_120 (RTX 5090, Blackwell) — VAST.ai template payload (org-or6b.12)
+# PREMIUM tier of the qwen3.8-27b self-hosted offer; the sm_86 Dockerfile in this
+# repo is the standard tier. Same pinned llamAmpere commit, same entrypoint and
+# assets (model downloads + verifies at boot) — the ONLY differences vs sm_86:
+#
+#   1. CUDA 12.8.1 bases. Blackwell consumer (sm_120) kernels require the
+#      CUDA >= 12.8 toolkit; the 12.4 base used for sm_86 cannot compile them.
+#   2. CMAKE_CUDA_ARCHITECTURES=120a (llamAmpere's ggml-cuda CMake has explicit
+#      sm_120/Blackwell handling: "120 == Blackwell, needs CUDA v12.8, FP4
+#      tensor cores"; their auto path selects 120a-real).
+#   3. cublas copy without a hard-coded patch version: the builder stages the
+#      REAL versioned .so files + soname symlinks in /build/cublas and the
+#      runtime stage COPYs that directory (directory COPY preserves the
+#      symlinks). This avoids guessing libcublas.so.12.8.x.y per 12.8 patch.
+#
+# Everything else — llamAmpere pin 31cdb8e22 (release/v0.3), FA+graphs on,
+# GGML_NATIVE off, driver-stub link fix, NCCL from pip wheel, tini, app user —
+# mirrors the proven sm_86 image (parity gate: parity-test.sh, org-xpi.2).
+ARG BASE=nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+ARG BASE_RT=nvidia/cuda:12.8.1-base-ubuntu22.04
+
+############################## build stage ##############################
+FROM ${BASE} AS builder
+ARG LLAMAAMPRE_COMMIT=31cdb8e2257aeb855462d1697e68b14738818f49
+# Cap parallel jobs: CUDA kernel builds are RAM-hungry (~1-2 GB per nvcc).
+ARG BUILD_JOBS=4
+ENV DEBIAN_FRONTEND=noninteractive CCACHE_DIR=/root/.ccache BUILD_JOBS=${BUILD_JOBS}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates build-essential ccache cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone https://github.com/JakeATX/llamAmpere.git llamAmpere \
+    && cd llamAmpere \
+    && git checkout --detach ${LLAMAAMPRE_COMMIT} \
+    && git rev-parse HEAD \
+    # --- driver-link fix (same as sm_86, org-xpi U2) ----------------------
+    # The devel base ships the CUDA driver STUB (libcuda.so, SONAME
+    # libcuda.so.1) but no real driver; FindCUDAToolkit resolves CUDA::cuda_driver
+    # to an empty IMPORTED_LOCATION and the final link cannot resolve cu*
+    # symbols. Publish the stub under its SONAME, patch ggml-cuda to link the
+    # stub by path, and pass -Wl,-rpath-link. Build stage only — the runtime
+    # stage must NOT ship the stub (it would shadow the real driver injected
+    # by the NVIDIA container runtime on VAST).
+    && ln -sf libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && sed -i 's#CUDA::cuda_driver#/usr/local/cuda/lib64/stubs/libcuda.so#g' \
+        ggml/src/ggml-cuda/CMakeLists.txt \
+    && grep -n 'stubs/libcuda.so' ggml/src/ggml-cuda/CMakeLists.txt
+
+WORKDIR /build
+RUN ccache -M 2G; \
+    cmake -S /src/llamAmpere -B /build -G "Unix Makefiles" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_CUDA=ON \
+      -DGGML_CUDA_FA=ON \
+      -DCMAKE_CUDA_ARCHITECTURES=120a \
+      -DCMAKE_CUDA_TOOLCHAIN_ROOT=/usr/local/cuda-12.8 \
+      -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc \
+      -DGGML_NATIVE=OFF \
+      -DGGML_CCACHE=ON \
+      -DGGML_CUDA_GRAPHS=ON \
+      -DLLAMA_BUILD_SERVER=ON \
+      -DLLAMA_BUILD_EXAMPLES=OFF \
+      -DGGML_BUILD_TESTS=OFF \
+      -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" \
+      -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" \
+    && cmake --build /build --target llama-server -j"${BUILD_JOBS}" \
+    # --- stage cublas for the runtime stage, version-agnostically ---------
+    # llamAmpere DT_NEEDs libcublas.so.12 + libcublasLt.so.12; the -base
+    # runtime image lacks them. Copy the REAL versioned files (dereferenced)
+    # and recreate the soname symlinks inside a staging dir; directory COPY
+    # below preserves the symlinks.
+    && install -d /build/cublas \
+    && for f in libcublas.so.12 libcublasLt.so.12; do \
+         src=$(readlink -f /usr/local/cuda-12.8/lib64/$f) \
+         || { echo "missing $f in builder" >&2; exit 1; }; \
+         cp -L "$src" /build/cublas/ \
+         && ln -sf "$(basename "$src")" /build/cublas/$f; \
+       done \
+    && ls -l /build/cublas
+
+############################## runtime stage ##############################
+FROM ${BASE_RT} AS runtime
+ARG LLAMAAMPRE_COMMIT=31cdb8e2257aeb855462d1697e68b14738818f49
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LLAMAAMPRE_COMMIT=${LLAMAAMPRE_COMMIT}
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.revision="${LLAMAAMPRE_COMMIT}"
+LABEL org.opencontainers.image.source="https://github.com/alx/llamampere-sm86"
+LABEL org.opencontainers.image.title="llamAmpere sm_120 (RTX 5090) VAST payload"
+
+# llamAmpere links nvidia-nccl (as on the sm_86 image): pull the .so's from
+# the pip wheel into /opt/nccl, drop pip. libgomp: ggml-cpu/ggml-base need it.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip curl ca-certificates tini libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --no-cache-dir "nvidia-nccl-cu12" \
+    && NCCL_LIB=$(python3 -c "import nvidia.nccl as n, os;print(os.path.join(n.__path__[0],'lib'))") \
+    && install -d /opt/nccl/lib \
+    && cp -L "$NCCL_LIB"/libnccl.so* /opt/nccl/lib/ \
+    && python3 -m pip uninstall -y nvidia-nccl-cu12 \
+    && rm -rf /root/.cache /home/app/.cache \
+    && ldconfig
+
+RUN useradd -m app \
+    && install -d -o app -g app /opt/llama/bin /opt/llama/templates /opt/llama/vocab /models
+
+# llamAmpere binary + ALL shared libs it links (BUILD_SHARED_LIBS=ON, as on
+# sm_86): COPY the whole /build/bin directory (directory COPY preserves the
+# .so -> .so.N symlinks).
+COPY --from=builder /build/bin/ /opt/llama/bin/
+# cublas + cublasLt (staged version-agnostically by the builder).
+COPY --from=builder /build/cublas/ /usr/local/cuda-12.8/lib64/
+RUN ldconfig
+
+# Runtime assets — identical to the sm_86 image (same model, same template,
+# same vocab): the P2 as-deployed chat template + vocab.
+COPY assets/Qwen3.8-Sharp.jinja /opt/llama/templates/Qwen3.8-Sharp.jinja
+COPY assets/atx_65536.txt       /opt/llama/vocab/atx_65536.txt
+COPY entrypoint.sh              /opt/llama/entrypoint.sh
+RUN chown -R app:app /opt/llama /models \
+    && chmod +x /opt/llama/entrypoint.sh \
+    && ldconfig
+
+# /opt/llama/bin: app .so's next to the exe; then NCCL; then CUDA runtime
+# (cudart, cublas). Driver libcuda comes from the nvidia runtime injection.
+ENV LD_LIBRARY_PATH=/opt/llama/bin:/opt/nccl/lib:/usr/local/cuda-12.8/lib64 \
+    GGML_Q8_TURBO3_MMA_FUSED=1
+
+USER app
+WORKDIR /models
+EXPOSE 8080
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/opt/llama/entrypoint.sh"]
