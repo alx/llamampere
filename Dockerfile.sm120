@@ -87,7 +87,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LLAMAAMPRE_COMMIT=${LLAMAAMPRE_COMMIT}
 ARG BUILD_DATE=unknown
 LABEL org.opencontainers.image.revision="${LLAMAAMPRE_COMMIT}"
-LABEL org.opencontainers.image.source="https://github.com/alx/llamampere-sm86"
+LABEL org.opencontainers.image.source="https://github.com/alx/llamampere"
 LABEL org.opencontainers.image.title="llamAmpere sm_120 (RTX 5090) VAST payload"
 
 # llamAmpere links nvidia-nccl (as on the sm_86 image): pull the .so's from

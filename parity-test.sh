@@ -11,6 +11,8 @@
 # Usage:
 #   1) sudo systemctl stop llama-server-ampere-p2.service   # ~20 min window
 #   2) PARITY_IMAGE=ghcr.io/alx/llamampere-sm86:31cdb8e22 bash parity-test.sh
+#      (legacy package = the as-deployed baseline; new-root builds are
+#       PARITY_IMAGE=ghcr.io/alx/llamampere:sm86-31cdb8e22 / sm120-31cdb8e22)
 #   3) ALWAYS: sudo systemctl start llama-server-ampere-p2.service  (trap does it)
 set -uo pipefail
 trap 'echo "!! restoring production llama-server ..."; sudo systemctl start llama-server-ampere-p2.service' EXIT

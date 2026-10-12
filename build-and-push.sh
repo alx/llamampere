@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build + push a llamAmpere image to GHCR and print the digest (org-xpi U2).
 #
-# Targets (org-or6b.12: two tiers of the qwen3.8-27b self-hosted offer):
-#   TARGET=sm86   (default)  Dockerfile,        ghcr.io/alx/llamampere-sm86    — standard tier (RTX 3090)
-#   TARGET=sm120              Dockerfile.sm120, ghcr.io/alx/llamampere-sm120   — premium tier (RTX 5090, CUDA 12.8)
+# ONE package, common root, arch as the tag dimension (org-or6b.12):
+#   TARGET=sm86   (default)  Dockerfile,        ghcr.io/alx/llamampere:sm86-<commit>   — standard tier (RTX 3090)
+#   TARGET=sm120              Dockerfile.sm120, ghcr.io/alx/llamampere:sm120-<commit> — premium tier (RTX 5090, CUDA 12.8)
 #
 # Run FROM ANY x86_64 DOCKER BOX (fami is the reference build box): the CUDA
 # toolkit comes from the base image, so no local GPU/nvcc is needed — only the
@@ -21,25 +21,27 @@
 # changed layers.
 #
 # After success, record the printed digest in vast/config.env:
-#   sm86  -> IMAGE_DIGEST=ghcr.io/alx/llamampere-sm86@sha256:...
-#   sm120 -> IMAGE_DIGEST_SM120=ghcr.io/alx/llamampere-sm120@sha256:...
+#   sm86  -> IMAGE_DIGEST=ghcr.io/alx/llamampere@sha256:...
+#   sm120 -> IMAGE_DIGEST_SM120=ghcr.io/alx/llamampere@sha256:...
 set -euo pipefail
 
 IMAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # build context
 CTX="$IMAGE_DIR"
+COMMIT="31cdb8e2257aeb855462d1697e68b14738818f49"
+SHORT="${COMMIT:0:7}"
+# Common package root for all arches; the tag carries the arch (org-or6b.12).
+GHCR_ROOT="ghcr.io/alx/llamampere"
 TARGET="${TARGET:-sm86}"
 if [[ -n "${GHCR_IMAGE:-}" ]]; then
     : # explicit override wins
 elif [[ "$TARGET" == "sm120" ]]; then
-    GHCR_IMAGE="ghcr.io/alx/llamampere-sm120:31cdb8e22"
+    GHCR_IMAGE="${GHCR_ROOT}:sm120-${SHORT}"
     DOCKERFILE="Dockerfile.sm120"
 else
     [[ "$TARGET" == "sm86" ]] || { echo "TARGET must be sm86|sm120, got: $TARGET" >&2; exit 1; }
-    GHCR_IMAGE="ghcr.io/alx/llamampere-sm86:31cdb8e22"
+    GHCR_IMAGE="${GHCR_ROOT}:sm86-${SHORT}"
     DOCKERFILE="Dockerfile"
 fi
-COMMIT="31cdb8e2257aeb855462d1697e68b14738818f49"
-SHORT="${COMMIT:0:7}"
 # CUDA kernel builds are RAM-hungry; cap parallel jobs (raise on beefier boxes).
 BUILD_JOBS="${BUILD_JOBS:-4}"
 
