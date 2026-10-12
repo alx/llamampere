@@ -130,6 +130,11 @@ RUN chown -R app:app /opt/llama /models \
 ENV LD_LIBRARY_PATH=/opt/llama/bin:/opt/nccl/lib:/usr/local/cuda-12.4/lib64 \
     GGML_Q8_TURBO3_MMA_FUSED=1
 
+# Server profile baked into the image (entrypoint.sh branches on this):
+# qwen38 (default, production P2) | llama8 (org-or6b.4 test mule).
+ARG SERVER_PROFILE=qwen38
+ENV SERVER_PROFILE=${SERVER_PROFILE}
+
 USER app
 WORKDIR /models
 EXPOSE 8080

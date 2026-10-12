@@ -35,6 +35,20 @@ CUDA base (Blackwell kernels need >= 12.8), the arch flag (`120a`), and a versio
 cublas stage. sm_90 (Hopper) is deliberately NOT built: DC H100/H200 rents at $2.59–5.79/hr
 (10–17× a 3090) and only pays off for 80–140 GB model classes.
 
+## Server profile (`SERVER_PROFILE`, org-or6b.4)
+
+`entrypoint.sh` branches on the baked-in `SERVER_PROFILE` (build arg, default
+`qwen38`):
+
+| Profile | What it serves | Flags |
+|---|---|---|
+| `qwen38` (default) | Qwen3.8-27B ATX (production P2 config) | MTP spec decode, turbo3 V-cache, 237k/180k ctx, Qwen jinja template, byte-verified 15588551712-byte download |
+| `llama8` | 8B test mule (multi-KV tenancy experiments) | plain: no MTP/vocab-map/turbo3, 120k/96k ctx, llama.cpp built-in chat template; **no default `MODEL_REPO`** — the 8B GGUF pick (and its license) is an org-or6b.4 decision, so the entrypoint dies asking for `MODEL_REPO` instead of guessing |
+
+`PROFILE=llama8 ./build-and-push.sh` bakes the profile in and suffixes the tag
+(`sm86-<commit>-llama8`). Non-default env (`MODEL_REPO`, `MODEL_FILE`,
+`MODEL_SIZE_BYTES`) still override per-instance at launch.
+
 ## What's in the image
 
 - `llama-server` + the full shared-lib closure (`libllama*`, `libggml*`, `libmtmd`) in

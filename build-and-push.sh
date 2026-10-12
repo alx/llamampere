@@ -13,6 +13,11 @@
 # Usage (from the repo):
 #   BUILD_JOBS=2 bash build-and-push.sh                 # BUILD_JOBS caps -j
 #   TARGET=sm120 bash build-and-push.sh                # premium tier
+#   PROFILE=llama8 bash build-and-push.sh              # org-or6b.4 test-mule
+#                                                      #   variant: tag gets a -<profile>
+#                                                      #   suffix (llama8 default
+#                                                      #   repo unset: it dies asking
+#                                                      #   for MODEL_REPO, by design)
 #   GHCR_IMAGE=... bash build-and-push.sh              # override target
 #
 # Upstream tracking: by default the build follows the LATEST JakeATX/llamAmpere
@@ -39,15 +44,23 @@ COMMIT="${LLAMAAMPRE_COMMIT:-$(git ls-remote https://github.com/JakeATX/llamAmpe
 SHORT="${COMMIT:0:7}"
 # Common package root for all arches; the tag carries the arch (org-or6b.12).
 GHCR_ROOT="ghcr.io/alx/llamampere-docker"
+# Server profile baked into the image (entrypoint.sh SERVER_PROFILE):
+# qwen38 (default, production) | llama8 (org-or6b.4 multi-KV test mule).
+PROFILE="${PROFILE:-qwen38}"
+[[ "$PROFILE" == qwen38 || "$PROFILE" == llama8 ]] \
+  || { echo "PROFILE must be qwen38|llama8, got: $PROFILE" >&2; exit 1; }
+TAG_SUFFIX=""
+[[ "$PROFILE" != "qwen38" ]] && TAG_SUFFIX="-${PROFILE}"
+
 TARGET="${TARGET:-sm86}"
 if [[ -n "${GHCR_IMAGE:-}" ]]; then
     : # explicit override wins
 elif [[ "$TARGET" == "sm120" ]]; then
-    GHCR_IMAGE="${GHCR_ROOT}:sm120-${SHORT}"
+    GHCR_IMAGE="${GHCR_ROOT}:sm120-${SHORT}${TAG_SUFFIX}"
     DOCKERFILE="Dockerfile.sm120"
 else
     [[ "$TARGET" == "sm86" ]] || { echo "TARGET must be sm86|sm120, got: $TARGET" >&2; exit 1; }
-    GHCR_IMAGE="${GHCR_ROOT}:sm86-${SHORT}"
+    GHCR_IMAGE="${GHCR_ROOT}:sm86-${SHORT}${TAG_SUFFIX}"
     DOCKERFILE="Dockerfile"
 fi
 TAG="${GHCR_IMAGE##*:}"
@@ -70,6 +83,7 @@ docker buildx build \
   --file "$CTX/$DOCKERFILE" \
   --build-arg LLAMAAMPRE_COMMIT="$COMMIT" \
   --build-arg BUILD_JOBS="$BUILD_JOBS" \
+  --build-arg SERVER_PROFILE="$PROFILE" \
   --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --push \
   --progress plain \
