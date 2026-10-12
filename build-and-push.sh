@@ -2,8 +2,8 @@
 # Build + push a llamAmpere image to GHCR and print the digest (org-xpi U2).
 #
 # ONE package, common root, arch as the tag dimension (org-or6b.12):
-#   TARGET=sm86   (default)  Dockerfile,        ghcr.io/alx/llamampere:sm86-<commit>   — standard tier (RTX 3090)
-#   TARGET=sm120              Dockerfile.sm120, ghcr.io/alx/llamampere:sm120-<commit> — premium tier (RTX 5090, CUDA 12.8)
+#   TARGET=sm86   (default)  Dockerfile,        ghcr.io/alx/llamampere-docker:sm86-<commit>   — standard tier (RTX 3090)
+#   TARGET=sm120              Dockerfile.sm120, ghcr.io/alx/llamampere-docker:sm120-<commit> — premium tier (RTX 5090, CUDA 12.8)
 #
 # Run FROM ANY x86_64 DOCKER BOX (fami is the reference build box): the CUDA
 # toolkit comes from the base image, so no local GPU/nvcc is needed — only the
@@ -15,22 +15,30 @@
 #   TARGET=sm120 bash build-and-push.sh                # premium tier
 #   GHCR_IMAGE=... bash build-and-push.sh              # override target
 #
-# Rebuilds are idempotent: bump LLAMAAMPRE_COMMIT in this script (and the
-# Dockerfile ARG default) only if the llamAmpere pin changes. ~30-60 min for a
-# cold compile; buildx caches per-layer, so a Dockerfile tweak re-runs only the
-# changed layers.
+# Upstream tracking: by default the build follows the LATEST JakeATX/llamAmpere
+# main commit (fetched at build time; the tag carries its sha, and the digest
+# printed at the end is the reproducible pin). Pin explicitly with
+#   LLAMAAMPRE_COMMIT=<full-sha> bash build-and-push.sh
+# ~30-60 min cold compile; buildx caches per-layer, so a Dockerfile tweak
+# re-runs only the changed layers.
 #
 # After success, record the printed digest in vast/config.env:
-#   sm86  -> IMAGE_DIGEST=ghcr.io/alx/llamampere@sha256:...
-#   sm120 -> IMAGE_DIGEST_SM120=ghcr.io/alx/llamampere@sha256:...
+#   sm86  -> IMAGE_DIGEST=ghcr.io/alx/llamampere-docker@sha256:...
+#   sm120 -> IMAGE_DIGEST_SM120=ghcr.io/alx/llamampere-docker@sha256:...
 set -euo pipefail
 
 IMAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # build context
 CTX="$IMAGE_DIR"
-COMMIT="31cdb8e2257aeb855462d1697e68b14738818f49"
+# Upstream: the llama.cpp fork "llamAmpere" (root project, NOT this repo):
+#   https://github.com/JakeATX/llamAmpere
+# This repo (alx/llamampere-docker) is pure Docker packaging for it.
+# Default: build from the LATEST upstream main; pin explicitly with
+#   LLAMAAMPRE_COMMIT=<full-sha> bash build-and-push.sh
+COMMIT="${LLAMAAMPRE_COMMIT:-$(git ls-remote https://github.com/JakeATX/llamAmpere.git refs/heads/main | awk '{print $1}')}"
+[[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve upstream main; set LLAMAAMPRE_COMMIT=<sha>" >&2; exit 1; }
 SHORT="${COMMIT:0:7}"
 # Common package root for all arches; the tag carries the arch (org-or6b.12).
-GHCR_ROOT="ghcr.io/alx/llamampere"
+GHCR_ROOT="ghcr.io/alx/llamampere-docker"
 TARGET="${TARGET:-sm86}"
 if [[ -n "${GHCR_IMAGE:-}" ]]; then
     : # explicit override wins
@@ -42,6 +50,7 @@ else
     GHCR_IMAGE="${GHCR_ROOT}:sm86-${SHORT}"
     DOCKERFILE="Dockerfile"
 fi
+TAG="${GHCR_IMAGE##*:}"
 # CUDA kernel builds are RAM-hungry; cap parallel jobs (raise on beefier boxes).
 BUILD_JOBS="${BUILD_JOBS:-4}"
 
@@ -70,7 +79,7 @@ docker buildx build \
 # --- record digest (registry API, gh token) --------------------------------
 # Give the registry a few seconds to publish the manifest after push.
 sleep 5
-# repo path = <image> with host + :tag removed  ->  alx/llamampere-sm86
+# repo path = <image> with host + :tag removed  ->  alx/llamampere-docker
 REPO_PATH="${GHCR_IMAGE#ghcr.io/}"
 REPO_PATH="${REPO_PATH%%:*}"
 GHTOKEN="$(gh auth token)"
@@ -79,7 +88,7 @@ RTOKEN="$(curl -s "https://ghcr.io/token?scope=repository:${REPO_PATH}:pull" | p
 DIGEST="$(curl -sI \
   -H "Authorization: Bearer ${RTOKEN:-$GHTOKEN}" \
   -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
-  "https://ghcr.io/v2/${REPO_PATH}/manifests/${SHORT}" \
+  "https://ghcr.io/v2/${REPO_PATH}/manifests/${TAG}" \
   | grep -i '^docker-content-digest' | awk '{print $2}' | tr -d '\r')"
 
 echo

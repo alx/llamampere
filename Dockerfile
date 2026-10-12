@@ -79,7 +79,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LLAMAAMPRE_COMMIT=${LLAMAAMPRE_COMMIT}
 ARG BUILD_DATE=unknown
 LABEL org.opencontainers.image.revision="${LLAMAAMPRE_COMMIT}"
-LABEL org.opencontainers.image.source="https://github.com/alx/llamampere"
+LABEL org.opencontainers.image.source="https://github.com/alx/llamampere-docker"
 
 # llamAmpere links nvidia-nccl (as on uncanny: pip nvidia-nccl lib).
 # Pull the nccl shared libs from the pip wheel into /opt/nccl, then drop pip.
